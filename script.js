@@ -13,14 +13,22 @@ const recordImage = document.querySelector("#recordImage");
 const fileName = document.querySelector("#fileName");
 const coachButton = document.querySelector("#coachButton");
 const coachResult = document.querySelector("#coachResult");
+const loginForm = document.querySelector("#loginForm");
+const runnerNameInput = document.querySelector("#runnerName");
+const logoutButton = document.querySelector("#logoutButton");
+const loginStatus = document.querySelector("#loginStatus");
+const historyList = document.querySelector("#historyList");
 
-const today = new Date();
+const STORAGE_KEY = "purplepace-users";
+const ACTIVE_USER_KEY = "purplepace-active-user";
+const today = startOfDay(new Date());
 const defaultRaceDate = new Date(today);
 defaultRaceDate.setDate(defaultRaceDate.getDate() + 112);
 raceDateInput.min = toInputDate(today);
 raceDateInput.value = toInputDate(defaultRaceDate);
 
 let latestPlan = null;
+let activeUser = storageGet(ACTIVE_USER_KEY) || "";
 
 paceStatusInputs.forEach((input) => {
   input.addEventListener("change", () => {
@@ -41,14 +49,30 @@ tabButtons.forEach((button) => {
   });
 });
 
-plannerForm.addEventListener("submit", (event) => {
+plannerForm.addEventListener("submit", handlePlanSubmit);
+
+loginForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  const profile = readProfile();
+  const name = runnerNameInput.value.trim();
 
-  if (!profile) return;
+  if (!name) {
+    loginStatus.textContent = "저장할 닉네임을 입력해 주세요.";
+    runnerNameInput.focus();
+    return;
+  }
 
-  latestPlan = buildPlan(profile);
-  renderPlan(latestPlan);
+  activeUser = name;
+  storageSet(ACTIVE_USER_KEY, activeUser);
+  ensureUser(activeUser);
+  updateLoginStatus();
+  loadLatestUserPlan();
+});
+
+logoutButton.addEventListener("click", () => {
+  activeUser = "";
+  storageRemove(ACTIVE_USER_KEY);
+  updateLoginStatus();
+  runnerNameInput.focus();
 });
 
 recordImage.addEventListener("change", () => {
@@ -75,10 +99,41 @@ coachButton.addEventListener("click", () => {
   if (latestPlan) {
     latestPlan.adjustment = advice.planLabel;
     renderPlan(latestPlan);
+    saveCurrentState({ coaching: advice });
   }
 });
 
-plannerForm.dispatchEvent(new Event("submit"));
+if (activeUser) {
+  runnerNameInput.value = activeUser;
+}
+
+updateLoginStatus();
+handlePlanSubmit();
+
+function handlePlanSubmit(event) {
+  event?.preventDefault();
+
+  try {
+    const profile = readProfile();
+
+    if (!profile) return;
+
+    latestPlan = buildPlan(profile);
+    renderPlan(latestPlan);
+    saveCurrentState();
+
+    if (event) {
+      document.querySelector("#plan-output").scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  } catch (error) {
+    planSummary.textContent = "훈련표를 만드는 중 문제가 생겼어요. 입력값을 다시 확인해 주세요.";
+    planList.innerHTML = "";
+    planInsight.innerHTML = `
+      <strong>잠깐만요</strong>
+      <span>${error.message || "예상하지 못한 오류가 발생했습니다."}</span>
+    `;
+  }
+}
 
 function readProfile() {
   const status = document.querySelector('input[name="paceStatus"]:checked').value;
@@ -87,7 +142,7 @@ function readProfile() {
   const goalPaceSeconds = paceToSeconds("#goalPace");
   const goalDistance = Number(document.querySelector("#goalDistance").value);
   const sessions = Number(document.querySelector("#sessions").value);
-  const raceDate = new Date(`${raceDateInput.value}T00:00:00`);
+  const raceDate = startOfDay(new Date(`${raceDateInput.value}T00:00:00`));
 
   if (!currentPaceSeconds || !goalPaceSeconds) {
     alert("페이스 또는 기록을 6:10, 32:00처럼 입력해 주세요.");
@@ -106,6 +161,7 @@ function readProfile() {
     goalDistance,
     sessions,
     raceDate,
+    createdAt: new Date().toISOString(),
   };
 }
 
@@ -319,6 +375,152 @@ function getCoachingAdvice(effort, completion, hasImage) {
   };
 }
 
+function updateLoginStatus() {
+  if (!activeUser) {
+    loginStatus.textContent = "로그인하면 생성한 훈련표가 닉네임별로 저장됩니다.";
+    logoutButton.disabled = true;
+    historyList.innerHTML = "";
+    return;
+  }
+
+  const user = ensureUser(activeUser);
+  const planCount = user.plans.length;
+  const coachingCount = user.coachings.length;
+  logoutButton.disabled = false;
+  loginStatus.textContent = `${activeUser}님 기록 저장 중 · 훈련표 ${planCount}개 · 코칭 ${coachingCount}개`;
+  renderHistory(user);
+}
+
+function renderHistory(user) {
+  const items = [
+    ...user.plans.slice(0, 2).map((plan) => ({
+      type: "훈련표",
+      title: `${plan.totalWeeks}주 · ${plan.goalPace}/km 목표`,
+      date: plan.createdAt,
+    })),
+    ...user.coachings.slice(0, 2).map((coaching) => ({
+      type: "코칭",
+      title: coaching.title,
+      date: coaching.createdAt,
+    })),
+  ].slice(0, 4);
+
+  if (!items.length) {
+    historyList.innerHTML = `<div class="history-item"><span>아직 저장된 기록이 없어요.</span><strong>첫 훈련표를 만들어보세요</strong></div>`;
+    return;
+  }
+
+  historyList.innerHTML = items
+    .map(
+      (item) => `
+        <div class="history-item">
+          <span><strong>${item.type}</strong> ${item.title}</span>
+          <span>${formatShortDate(item.date)}</span>
+        </div>
+      `
+    )
+    .join("");
+}
+
+function saveCurrentState(extra = {}) {
+  if (!activeUser || !latestPlan) return;
+
+  const users = readUsers();
+  const user = users[activeUser] || { plans: [], coachings: [] };
+  const planSnapshot = {
+    createdAt: new Date().toISOString(),
+    raceDate: latestPlan.raceDate.toISOString(),
+    goalDistance: latestPlan.goalDistance,
+    sessions: latestPlan.sessions,
+    currentPace: secondsToPace(latestPlan.currentPaceSeconds),
+    goalPace: secondsToPace(latestPlan.goalPaceSeconds),
+    totalWeeks: latestPlan.totalWeeks,
+    intensity: latestPlan.intensity,
+    adjustment: latestPlan.adjustment,
+    summary: planSummary.textContent,
+  };
+
+  user.plans = [planSnapshot, ...user.plans.filter((plan) => plan.summary !== planSnapshot.summary)]
+    .slice(0, 8);
+
+  if (extra.coaching) {
+    user.coachings = [
+      {
+        createdAt: new Date().toISOString(),
+        title: extra.coaching.title,
+        message: extra.coaching.message,
+        planLabel: extra.coaching.planLabel,
+      },
+      ...user.coachings,
+    ].slice(0, 12);
+  }
+
+  users[activeUser] = user;
+  writeUsers(users);
+  updateLoginStatus();
+}
+
+function loadLatestUserPlan() {
+  const user = ensureUser(activeUser);
+  const latestSavedPlan = user.plans[0];
+
+  if (!latestSavedPlan) return;
+
+  document.querySelector("#currentPace").value = latestSavedPlan.currentPace;
+  document.querySelector("#goalPace").value = latestSavedPlan.goalPace;
+  document.querySelector("#goalDistance").value = String(latestSavedPlan.goalDistance);
+  document.querySelector("#sessions").value = String(latestSavedPlan.sessions);
+  raceDateInput.value = toInputDate(new Date(latestSavedPlan.raceDate));
+  handlePlanSubmit();
+}
+
+function ensureUser(name) {
+  const users = readUsers();
+
+  if (!users[name]) {
+    users[name] = { plans: [], coachings: [] };
+    writeUsers(users);
+  }
+
+  return users[name];
+}
+
+function readUsers() {
+  try {
+    return JSON.parse(storageGet(STORAGE_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function writeUsers(users) {
+  storageSet(STORAGE_KEY, JSON.stringify(users));
+}
+
+function storageGet(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function storageSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    loginStatus.textContent = "브라우저 저장소가 막혀 있어 이번 화면에서만 사용할 수 있어요.";
+  }
+}
+
+function storageRemove(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    return null;
+  }
+}
+
 function paceToSeconds(selector) {
   return parsePace(document.querySelector(selector).value);
 }
@@ -351,6 +553,17 @@ function toInputDate(date) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function formatShortDate(value) {
+  return new Date(value).toLocaleDateString("ko-KR", {
+    month: "numeric",
+    day: "numeric",
+  });
 }
 
 function clamp(value, min, max) {

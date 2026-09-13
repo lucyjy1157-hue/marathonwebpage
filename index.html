@@ -72,6 +72,35 @@
         </div>
       </section>
 
+      <section class="section account-section" id="account">
+        <div class="account-copy">
+          <p class="eyebrow">My log</p>
+          <h2>내 기록으로 이어서 보기</h2>
+          <p>
+            닉네임으로 간단히 시작하면 이 브라우저에 훈련표와 코칭 기록을
+            저장합니다. 다음에 다시 열어도 내 기록을 이어서 볼 수 있어요.
+          </p>
+        </div>
+        <form class="account-card" id="loginForm">
+          <label>
+            닉네임
+            <input
+              type="text"
+              id="runnerName"
+              autocomplete="nickname"
+              placeholder="예: 지민"
+              maxlength="20"
+            />
+          </label>
+          <button class="button primary" type="submit">내 기록 시작하기</button>
+          <button class="button secondary" type="button" id="logoutButton">기록 전환</button>
+          <p class="form-note" id="loginStatus">
+            로그인하면 생성한 훈련표가 닉네임별로 저장됩니다.
+          </p>
+          <div class="history-list" id="historyList" aria-live="polite"></div>
+        </form>
+      </section>
+
       <section class="section split" id="planner">
         <div class="section-copy">
           <p class="eyebrow">Start easy</p>
