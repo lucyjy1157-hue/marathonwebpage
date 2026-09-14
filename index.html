@@ -72,35 +72,6 @@
         </div>
       </section>
 
-      <section class="section account-section" id="account">
-        <div class="account-copy">
-          <p class="eyebrow">My log</p>
-          <h2>내 기록으로 이어서 보기</h2>
-          <p>
-            닉네임으로 간단히 시작하면 이 브라우저에 훈련표와 코칭 기록을
-            저장합니다. 다음에 다시 열어도 내 기록을 이어서 볼 수 있어요.
-          </p>
-        </div>
-        <form class="account-card" id="loginForm">
-          <label>
-            닉네임
-            <input
-              type="text"
-              id="runnerName"
-              autocomplete="nickname"
-              placeholder="예: 지민"
-              maxlength="20"
-            />
-          </label>
-          <button class="button primary" type="submit">내 기록 시작하기</button>
-          <button class="button secondary" type="button" id="logoutButton">기록 전환</button>
-          <p class="form-note" id="loginStatus">
-            로그인하면 생성한 훈련표가 닉네임별로 저장됩니다.
-          </p>
-          <div class="history-list" id="historyList" aria-live="polite"></div>
-        </form>
-      </section>
-
       <section class="section split" id="planner">
         <div class="section-copy">
           <p class="eyebrow">Start easy</p>
@@ -233,17 +204,17 @@
 
       <section class="section output-section" id="plan-output">
         <div class="section-heading">
-          <p class="eyebrow">Your plan</p>
-          <h2>길게 말고, 핵심만</h2>
+          <p class="eyebrow">Generated plan</p>
+          <h2>입력한 페이스로 만든 맞춤 훈련</h2>
           <p id="planSummary">
-            입력값을 넣고 버튼을 누르면 준비 흐름과 이번에 신경 쓸 훈련만
-            짧게 보여줍니다.
+            페이스를 입력하고 훈련표를 만들면, 지금 바로 따라할 수 있는
+            이번 주 훈련과 페이스 구간이 표시됩니다.
           </p>
         </div>
         <div class="plan-layout">
           <aside class="plan-insight" id="planInsight">
-            <strong>오늘의 방향</strong>
-            <span>현재 페이스와 목표의 차이를 보고 무리 없는 강도로 맞춥니다.</span>
+            <strong>아직 계획이 없어요</strong>
+            <span>현재 페이스, 목표 페이스, 날짜를 넣고 훈련표를 만들어 주세요.</span>
           </aside>
           <div class="plan-list" id="planList" aria-live="polite"></div>
         </div>
@@ -251,10 +222,10 @@
 
       <section class="section split reverse" id="coaching">
         <div class="coaching-card">
-          <h2>오늘 뛴 기록 올리기</h2>
+          <h2>내 운동 인사이트 보기</h2>
           <p>
-            러닝 앱 캡처를 올리고 오늘 느낌을 고르면 다음 훈련을 유지할지,
-            살짝 줄일지, 조금 올려도 될지 알려줍니다.
+            러닝 앱 캡처를 올리거나 오늘 운동 수치를 넣으면, 페이스가
+            적절했는지와 다음 훈련을 어떻게 바꾸면 좋을지 알려줍니다.
           </p>
           <label class="upload-box" for="recordImage">
             <input type="file" id="recordImage" accept="image/*" />
@@ -262,6 +233,14 @@
             <small id="fileName">러닝 앱 캡처 이미지를 올려주세요.</small>
           </label>
           <div class="form-grid compact">
+            <label>
+              달린 거리
+              <input type="number" id="workoutDistance" min="0" step="0.1" value="5" />
+            </label>
+            <label>
+              평균 페이스
+              <input type="text" id="workoutPace" value="6:20" inputmode="numeric" />
+            </label>
             <label>
               오늘 체감도
               <select id="effort">
@@ -280,10 +259,11 @@
             </label>
           </div>
           <button class="button primary full" type="button" id="coachButton">
-            다음 훈련 조정하기
+            인사이트 보기
           </button>
           <div class="coach-result" id="coachResult">
-            기록을 올리면 다음 훈련을 어떻게 바꿀지 짧게 알려드릴게요.
+            운동 기록을 넣으면 오늘 달리기가 계획보다 쉬웠는지, 적절했는지,
+            과했는지 분석해드릴게요.
           </div>
         </div>
         <figure class="section-media">

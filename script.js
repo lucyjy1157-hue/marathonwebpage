@@ -13,14 +13,7 @@ const recordImage = document.querySelector("#recordImage");
 const fileName = document.querySelector("#fileName");
 const coachButton = document.querySelector("#coachButton");
 const coachResult = document.querySelector("#coachResult");
-const loginForm = document.querySelector("#loginForm");
-const runnerNameInput = document.querySelector("#runnerName");
-const logoutButton = document.querySelector("#logoutButton");
-const loginStatus = document.querySelector("#loginStatus");
-const historyList = document.querySelector("#historyList");
 
-const STORAGE_KEY = "purplepace-users";
-const ACTIVE_USER_KEY = "purplepace-active-user";
 const today = startOfDay(new Date());
 const defaultRaceDate = new Date(today);
 defaultRaceDate.setDate(defaultRaceDate.getDate() + 112);
@@ -28,7 +21,6 @@ raceDateInput.min = toInputDate(today);
 raceDateInput.value = toInputDate(defaultRaceDate);
 
 let latestPlan = null;
-let activeUser = storageGet(ACTIVE_USER_KEY) || "";
 
 paceStatusInputs.forEach((input) => {
   input.addEventListener("change", () => {
@@ -49,30 +41,15 @@ tabButtons.forEach((button) => {
   });
 });
 
-plannerForm.addEventListener("submit", handlePlanSubmit);
-
-loginForm.addEventListener("submit", (event) => {
+plannerForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  const name = runnerNameInput.value.trim();
+  const profile = readProfile();
 
-  if (!name) {
-    loginStatus.textContent = "저장할 닉네임을 입력해 주세요.";
-    runnerNameInput.focus();
-    return;
-  }
+  if (!profile) return;
 
-  activeUser = name;
-  storageSet(ACTIVE_USER_KEY, activeUser);
-  ensureUser(activeUser);
-  updateLoginStatus();
-  loadLatestUserPlan();
-});
-
-logoutButton.addEventListener("click", () => {
-  activeUser = "";
-  storageRemove(ACTIVE_USER_KEY);
-  updateLoginStatus();
-  runnerNameInput.focus();
+  latestPlan = buildPlan(profile);
+  renderPlan(latestPlan);
+  document.querySelector("#plan-output").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
 recordImage.addEventListener("change", () => {
@@ -81,59 +58,12 @@ recordImage.addEventListener("change", () => {
 });
 
 coachButton.addEventListener("click", () => {
-  const effort = document.querySelector("#effort").value;
-  const completion = Number(document.querySelector("#completion").value);
-  const hasImage = Boolean(recordImage.files?.[0]);
-  const advice = getCoachingAdvice(effort, completion, hasImage);
+  const workout = readWorkout();
 
-  coachResult.innerHTML = `
-    <strong>${advice.title}</strong>
-    <p>${advice.message}</p>
-    <ul>
-      <li>${advice.nextRun}</li>
-      <li>${advice.adjustment}</li>
-      <li>${advice.recovery}</li>
-    </ul>
-  `;
+  if (!workout) return;
 
-  if (latestPlan) {
-    latestPlan.adjustment = advice.planLabel;
-    renderPlan(latestPlan);
-    saveCurrentState({ coaching: advice });
-  }
+  renderWorkoutInsight(buildWorkoutInsight(workout, latestPlan));
 });
-
-if (activeUser) {
-  runnerNameInput.value = activeUser;
-}
-
-updateLoginStatus();
-handlePlanSubmit();
-
-function handlePlanSubmit(event) {
-  event?.preventDefault();
-
-  try {
-    const profile = readProfile();
-
-    if (!profile) return;
-
-    latestPlan = buildPlan(profile);
-    renderPlan(latestPlan);
-    saveCurrentState();
-
-    if (event) {
-      document.querySelector("#plan-output").scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  } catch (error) {
-    planSummary.textContent = "훈련표를 만드는 중 문제가 생겼어요. 입력값을 다시 확인해 주세요.";
-    planList.innerHTML = "";
-    planInsight.innerHTML = `
-      <strong>잠깐만요</strong>
-      <span>${error.message || "예상하지 못한 오류가 발생했습니다."}</span>
-    `;
-  }
-}
 
 function readProfile() {
   const status = document.querySelector('input[name="paceStatus"]:checked').value;
@@ -145,24 +75,16 @@ function readProfile() {
   const raceDate = startOfDay(new Date(`${raceDateInput.value}T00:00:00`));
 
   if (!currentPaceSeconds || !goalPaceSeconds) {
-    alert("페이스 또는 기록을 6:10, 32:00처럼 입력해 주세요.");
+    showPlanError("페이스는 6:10처럼 분:초 형식으로 입력해 주세요.");
     return null;
   }
 
   if (Number.isNaN(raceDate.getTime()) || raceDate <= today) {
-    alert("목표 날짜는 오늘 이후로 선택해 주세요.");
+    showPlanError("목표 날짜는 오늘 이후로 선택해 주세요.");
     return null;
   }
 
-  return {
-    status,
-    currentPaceSeconds,
-    goalPaceSeconds,
-    goalDistance,
-    sessions,
-    raceDate,
-    createdAt: new Date().toISOString(),
-  };
+  return { status, currentPaceSeconds, goalPaceSeconds, goalDistance, sessions, raceDate };
 }
 
 function getUnknownPaceSeconds() {
@@ -181,82 +103,108 @@ function buildPlan(profile) {
   const daysUntilRace = Math.ceil((profile.raceDate - today) / 86400000);
   const totalWeeks = clamp(Math.ceil(daysUntilRace / 7), 4, 24);
   const paceGap = profile.currentPaceSeconds - profile.goalPaceSeconds;
-  const intensity =
-    paceGap > 45 ? "build" : paceGap > 5 ? "balanced" : paceGap > -20 ? "sharpen" : "protect";
-  const longRunBase = Math.max(4, Math.round(profile.goalDistance * 0.28));
-  const peakLongRun = Math.round(profile.goalDistance * (profile.goalDistance > 20 ? 0.76 : 0.9));
-  const weeks = Array.from({ length: totalWeeks }, (_, index) => {
-    const week = index + 1;
-    const progress = week / totalWeeks;
-    const isRecovery = week % 4 === 0 && week !== totalWeeks;
-    const longRun = isRecovery
-      ? Math.max(longRunBase, Math.round(longRunBase + (peakLongRun - longRunBase) * progress * 0.72))
-      : Math.max(longRunBase, Math.round(longRunBase + (peakLongRun - longRunBase) * progress));
-    const easyPace = secondsToPace(profile.currentPaceSeconds + 35);
-    const tempoPace = secondsToPace(
-      Math.round((profile.currentPaceSeconds + profile.goalPaceSeconds) / 2)
-    );
-    const goalPace = secondsToPace(profile.goalPaceSeconds);
-    const workouts = makeWorkouts({
-      week,
-      totalWeeks,
-      sessions: profile.sessions,
-      longRun,
-      easyPace,
-      tempoPace,
-      goalPace,
-      intensity,
-      isRecovery,
-    });
-
-    return { week, isRecovery, longRun, workouts };
+  const level = getLevel(profile.currentPaceSeconds, paceGap);
+  const zones = getTrainingZones(profile.currentPaceSeconds, profile.goalPaceSeconds);
+  const longRunTarget = getLongRunTarget(profile.goalDistance, totalWeeks, level);
+  const weeklyVolume = getWeeklyVolume(profile.goalDistance, profile.sessions, level, totalWeeks);
+  const schedule = buildWeeklySchedule({
+    sessions: profile.sessions,
+    zones,
+    goalDistance: profile.goalDistance,
+    longRunTarget,
+    weeklyVolume,
+    level,
   });
 
   return {
     ...profile,
     totalWeeks,
-    intensity,
-    weeks,
-    adjustment: "기본 계획",
+    paceGap,
+    level,
+    zones,
+    longRunTarget,
+    weeklyVolume,
+    schedule,
   };
 }
 
-function makeWorkouts({
-  week,
-  totalWeeks,
-  sessions,
-  longRun,
-  easyPace,
-  tempoPace,
-  goalPace,
-  intensity,
-  isRecovery,
-}) {
-  const taper = week > totalWeeks - 2;
-  const qualityLabel =
-    intensity === "build"
-      ? `가벼운 템포 ${Math.max(12, week * 2)}분, ${tempoPace}/km`
-      : intensity === "sharpen"
-      ? `목표 페이스 반복주 ${Math.min(6, week)}회, ${goalPace}/km`
-      : intensity === "protect"
-      ? `이지런 중심, 빠른 구간은 짧게 ${goalPace}/km`
-      : `템포런 ${Math.max(15, week * 2)}분, ${tempoPace}/km`;
+function getLevel(currentPaceSeconds, paceGap) {
+  if (currentPaceSeconds >= 430) return "starter";
+  if (paceGap > 45) return "base";
+  if (paceGap > 10) return "build";
+  if (paceGap >= -10) return "specific";
+  return "protect";
+}
 
-  const workouts = [
-    `이지런 ${Math.max(4, Math.round(longRun * 0.42))}km, ${easyPace}/km`,
-    isRecovery ? `회복주 ${Math.max(3, Math.round(longRun * 0.35))}km` : qualityLabel,
-    taper ? `가벼운 롱런 ${Math.max(6, Math.round(longRun * 0.55))}km` : `롱런 ${longRun}km`,
+function getTrainingZones(currentPaceSeconds, goalPaceSeconds) {
+  return {
+    recovery: currentPaceSeconds + 65,
+    easy: currentPaceSeconds + 35,
+    steady: Math.round((currentPaceSeconds + goalPaceSeconds) / 2) + 8,
+    tempo: Math.round((currentPaceSeconds + goalPaceSeconds) / 2) - 5,
+    goal: goalPaceSeconds,
+    interval: Math.max(goalPaceSeconds - 20, currentPaceSeconds - 35),
+  };
+}
+
+function getLongRunTarget(goalDistance, totalWeeks, level) {
+  const ratio = goalDistance >= 42 ? 0.34 : goalDistance >= 21 ? 0.42 : 0.55;
+  const base = Math.round(goalDistance * ratio);
+  const levelBonus = { starter: -2, base: 0, build: 1, specific: 2, protect: -1 }[level];
+  const weekBonus = totalWeeks >= 12 ? 2 : 0;
+  return Math.max(5, Math.round(base + levelBonus + weekBonus));
+}
+
+function getWeeklyVolume(goalDistance, sessions, level, totalWeeks) {
+  const base = goalDistance >= 42 ? 28 : goalDistance >= 21 ? 20 : goalDistance >= 10 ? 14 : 9;
+  const sessionBonus = (sessions - 3) * 5;
+  const levelBonus = { starter: -4, base: 0, build: 3, specific: 5, protect: -2 }[level];
+  const weekBonus = totalWeeks >= 16 ? 4 : totalWeeks <= 6 ? -3 : 0;
+  return Math.max(8, Math.round(base + sessionBonus + levelBonus + weekBonus));
+}
+
+function buildWeeklySchedule({ sessions, zones, goalDistance, longRunTarget, weeklyVolume, level }) {
+  const easyDistance = Math.max(4, Math.round(weeklyVolume * 0.22));
+  const recoveryDistance = Math.max(3, Math.round(weeklyVolume * 0.16));
+  const tempoMinutes = level === "starter" ? 12 : level === "base" ? 16 : 20;
+  const intervalRepeats = level === "specific" ? 6 : 4;
+  const goalLabel = goalDistance >= 21 ? "목표 페이스 적응" : "빠른 감각";
+
+  const schedule = [
+    {
+      title: "화 · 이지런",
+      detail: `${easyDistance}km를 ${paceRange(zones.easy, 10)}로 편하게`,
+      reason: "숨이 차지 않는 강도로 주간 훈련의 바닥을 만듭니다.",
+    },
+    {
+      title: "목 · 템포런",
+      detail: `워밍업 후 ${tempoMinutes}분을 ${paceRange(zones.tempo, 8)}로`,
+      reason: "현재 페이스와 목표 페이스 사이를 몸에 익히는 핵심 훈련입니다.",
+    },
+    {
+      title: "주말 · 롱런",
+      detail: `${longRunTarget}km를 ${paceRange(zones.easy + 10, 12)}로`,
+      reason: "마라톤 준비에서 가장 중요한 오래 달리는 힘을 쌓습니다.",
+    },
   ];
 
   if (sessions >= 4) {
-    workouts.splice(2, 0, `보강 또는 조깅 ${Math.max(4, Math.round(longRun * 0.32))}km`);
+    schedule.splice(2, 0, {
+      title: "토 · 회복 조깅",
+      detail: `${recoveryDistance}km를 ${paceRange(zones.recovery, 12)}로`,
+      reason: "다음 롱런을 망치지 않도록 다리를 풀어주는 날입니다.",
+    });
   }
 
   if (sessions >= 5) {
-    workouts.splice(1, 0, `회복 조깅 ${Math.max(3, Math.round(longRun * 0.28))}km`);
+    schedule.splice(2, 0, {
+      title: `금 · ${goalLabel}`,
+      detail: `${intervalRepeats}회 반복, 600m는 ${paceRange(zones.interval, 6)}로`,
+      reason: "목표 페이스가 낯설지 않게 짧고 선명하게 자극합니다.",
+    });
   }
 
-  return workouts;
+  return schedule;
 }
 
 function renderPlan(plan) {
@@ -264,261 +212,152 @@ function renderPlan(plan) {
     month: "long",
     day: "numeric",
   });
-  const statusLabel = plan.status === "known" ? "입력한 페이스" : "추정한 페이스";
-  const intensityLabel = {
-    build: "먼저 오래 달리는 힘을 만드는 쪽으로 가요.",
-    balanced: "거리와 페이스를 반반씩 챙기면 좋아요.",
-    sharpen: "이미 꽤 가까워서 목표 페이스 감각을 살려요.",
-    protect: "욕심내기보다 다치지 않고 유지하는 게 좋아요.",
-  }[plan.intensity];
+  const gapText =
+    plan.paceGap > 0
+      ? `목표보다 ${Math.round(plan.paceGap)}초/km 느린 상태`
+      : `목표보다 ${Math.abs(Math.round(plan.paceGap))}초/km 빠르거나 비슷한 상태`;
+  const levelText = {
+    starter: "지금은 완주 루틴을 만드는 단계입니다.",
+    base: "기초 지구력을 먼저 올리면 목표 페이스가 훨씬 편해집니다.",
+    build: "목표 페이스에 가까워지는 중이라 템포런 비중을 조금 둡니다.",
+    specific: "목표 페이스 근처라 실전 감각 훈련이 잘 맞습니다.",
+    protect: "현재 능력이 충분하니 과훈련을 막는 게 중요합니다.",
+  }[plan.level];
 
-  planSummary.textContent = `${raceLabel}까지 ${plan.totalWeeks}주 남았어요. ${statusLabel} ${secondsToPace(
+  planSummary.textContent = `${raceLabel}까지 ${plan.totalWeeks}주. 현재 ${secondsToPace(
     plan.currentPaceSeconds
-  )}/km 기준으로, 목표 ${secondsToPace(plan.goalPaceSeconds)}/km에 맞춰 핵심만 정리했어요.`;
+  )}/km, 목표 ${secondsToPace(plan.goalPaceSeconds)}/km 기준으로 이번 주 훈련을 만들었습니다.`;
 
   planInsight.innerHTML = `
-    <strong>${plan.adjustment}</strong>
-    <span>${intensityLabel}</span>
-    <span>주 ${plan.sessions}회 기준으로, 힘든 주 뒤에는 가볍게 회복하는 흐름입니다.</span>
+    <strong>${gapText}</strong>
+    <span>${levelText}</span>
+    <span>이번 주 총량은 약 ${plan.weeklyVolume}km, 롱런은 ${plan.longRunTarget}km가 적당합니다.</span>
   `;
 
-  planList.innerHTML = summarizePlan(plan)
-    .map(
-      (phase) => `
-        <article class="week-card">
-          <strong>${phase.title}</strong>
-          <p>${phase.description}</p>
-          <ul>
-            ${phase.items.map((item) => `<li>${item}</li>`).join("")}
-          </ul>
-        </article>
-      `
-    )
-    .join("");
+  planList.innerHTML = [
+    paceZoneCard(plan),
+    ...plan.schedule.map(scheduleCard),
+    ruleCard(plan),
+  ].join("");
 }
 
-function summarizePlan(plan) {
-  const firstLongRun = plan.weeks[0].longRun;
-  const middleLongRun = plan.weeks[Math.max(0, Math.floor(plan.totalWeeks * 0.45) - 1)].longRun;
-  const peakLongRun = Math.max(...plan.weeks.map((week) => week.longRun));
-  const goalPace = secondsToPace(plan.goalPaceSeconds);
-  const easyPace = secondsToPace(plan.currentPaceSeconds + 35);
-  const tempoPace = secondsToPace(
-    Math.round((plan.currentPaceSeconds + plan.goalPaceSeconds) / 2)
-  );
-
-  return [
-    {
-      title: "1. 몸 풀기",
-      description: "처음엔 기록보다 루틴을 만드는 게 먼저예요.",
-      items: [`편한 달리기 ${easyPace}/km`, `긴 달리기 ${firstLongRun}km부터 시작`],
-    },
-    {
-      title: "2. 조금씩 늘리기",
-      description: "거리는 천천히 늘리고, 빠른 날은 짧게만 넣어요.",
-      items: [`긴 달리기 ${middleLongRun}km 안팎`, `템포 구간은 ${tempoPace}/km 근처`],
-    },
-    {
-      title: "3. 중요한 시기",
-      description: "몸이 적응하면 목표 페이스를 짧게 연습합니다.",
-      items: [`최대 긴 달리기 ${peakLongRun}km`, `목표 페이스 ${goalPace}/km 감각 체크`],
-    },
-    {
-      title: "4. 대회 전 정리",
-      description: "마지막엔 더 세게 하기보다 가볍게 만드는 게 핵심이에요.",
-      items: ["훈련량 줄이고 컨디션 회복", "짧은 조깅과 스트레칭 중심"],
-    },
-  ];
+function paceZoneCard(plan) {
+  return `
+    <article class="week-card highlight-card">
+      <strong>훈련 페이스 기준</strong>
+      <p>모든 훈련은 이 범위를 기준으로 진행하세요.</p>
+      <ul>
+        <li>회복 조깅: ${paceRange(plan.zones.recovery, 12)}</li>
+        <li>이지런: ${paceRange(plan.zones.easy, 10)}</li>
+        <li>템포런: ${paceRange(plan.zones.tempo, 8)}</li>
+        <li>목표 페이스: ${secondsToPace(plan.zones.goal)}/km</li>
+      </ul>
+    </article>
+  `;
 }
 
-function getCoachingAdvice(effort, completion, hasImage) {
-  if (!hasImage) {
-    return {
-      title: "이미지 없이 체감도 기준으로 조정합니다",
-      message: "기록 이미지를 올리면 더 잘 맞춰볼 수 있지만, 지금 선택한 느낌만으로도 가볍게 조정할 수 있어요.",
-      nextRun: "다음 러닝은 편하게 30분만 뛰어보세요.",
-      adjustment: "이번 주는 계획을 올리지 않고 그대로 갑니다.",
-      recovery: "피곤하면 하루 쉬어도 괜찮아요.",
-      planLabel: "보수적 조정",
-    };
-  }
-
-  if (effort === "hard" || completion <= 60) {
-    return {
-      title: "오늘은 꽤 무리했어요",
-      message: "다음 훈련은 욕심내기보다 몸을 다시 가볍게 만드는 쪽이 좋아요.",
-      nextRun: "다음 러닝은 목표보다 훨씬 느리게 편하게 뛰세요.",
-      adjustment: "이번 주 긴 달리기는 15% 정도 줄입니다.",
-      recovery: "내일은 쉬거나 가볍게 걷는 정도가 좋아요.",
-      planLabel: "피로 반영 조정",
-    };
-  }
-
-  if (effort === "easy" && completion === 100) {
-    return {
-      title: "몸이 잘 따라오고 있어요",
-      message: "오늘 느낌이 좋았다면 다음 주에 아주 조금만 올려도 됩니다.",
-      nextRun: "다음 이지런 마지막 10분만 살짝 빠르게 마무리해요.",
-      adjustment: "긴 달리기는 그대로 두고 빠른 구간만 조금 추가합니다.",
-      recovery: "좋아도 한 번에 많이 올리지는 마세요.",
-      planLabel: "적응 반영 조정",
-    };
-  }
-
-  return {
-    title: "지금 흐름 좋아요",
-    message: "너무 쉽지도, 너무 힘들지도 않은 상태라 계획을 그대로 이어가면 됩니다.",
-    nextRun: "다음 러닝은 예정대로 편하게 진행하세요.",
-    adjustment: "긴 달리기와 빠른 훈련 모두 유지합니다.",
-    recovery: "내일까지 피로가 남으면 페이스만 조금 낮추세요.",
-    planLabel: "계획 유지",
-  };
+function scheduleCard(item) {
+  return `
+    <article class="week-card">
+      <strong>${item.title}</strong>
+      <p>${item.detail}</p>
+      <ul>
+        <li>${item.reason}</li>
+      </ul>
+    </article>
+  `;
 }
 
-function updateLoginStatus() {
-  if (!activeUser) {
-    loginStatus.textContent = "로그인하면 생성한 훈련표가 닉네임별로 저장됩니다.";
-    logoutButton.disabled = true;
-    historyList.innerHTML = "";
-    return;
-  }
-
-  const user = ensureUser(activeUser);
-  const planCount = user.plans.length;
-  const coachingCount = user.coachings.length;
-  logoutButton.disabled = false;
-  loginStatus.textContent = `${activeUser}님 기록 저장 중 · 훈련표 ${planCount}개 · 코칭 ${coachingCount}개`;
-  renderHistory(user);
+function ruleCard(plan) {
+  const deloadDistance = Math.max(4, Math.round(plan.longRunTarget * 0.72));
+  return `
+    <article class="week-card">
+      <strong>조정 규칙</strong>
+      <p>몸 상태에 따라 이렇게 바꾸면 됩니다.</p>
+      <ul>
+        <li>다리가 무거우면 템포런 대신 ${deloadDistance}km 이지런</li>
+        <li>롱런 다음 날은 빠른 훈련 금지</li>
+        <li>2주 연속 편하면 롱런만 1~2km 증가</li>
+      </ul>
+    </article>
+  `;
 }
 
-function renderHistory(user) {
-  const items = [
-    ...user.plans.slice(0, 2).map((plan) => ({
-      type: "훈련표",
-      title: `${plan.totalWeeks}주 · ${plan.goalPace}/km 목표`,
-      date: plan.createdAt,
-    })),
-    ...user.coachings.slice(0, 2).map((coaching) => ({
-      type: "코칭",
-      title: coaching.title,
-      date: coaching.createdAt,
-    })),
-  ].slice(0, 4);
+function readWorkout() {
+  const distance = Number(document.querySelector("#workoutDistance").value);
+  const workoutPace = paceToSeconds("#workoutPace");
+  const effort = document.querySelector("#effort").value;
+  const completion = Number(document.querySelector("#completion").value);
+  const hasImage = Boolean(recordImage.files?.[0]);
 
-  if (!items.length) {
-    historyList.innerHTML = `<div class="history-item"><span>아직 저장된 기록이 없어요.</span><strong>첫 훈련표를 만들어보세요</strong></div>`;
-    return;
-  }
-
-  historyList.innerHTML = items
-    .map(
-      (item) => `
-        <div class="history-item">
-          <span><strong>${item.type}</strong> ${item.title}</span>
-          <span>${formatShortDate(item.date)}</span>
-        </div>
-      `
-    )
-    .join("");
-}
-
-function saveCurrentState(extra = {}) {
-  if (!activeUser || !latestPlan) return;
-
-  const users = readUsers();
-  const user = users[activeUser] || { plans: [], coachings: [] };
-  const planSnapshot = {
-    createdAt: new Date().toISOString(),
-    raceDate: latestPlan.raceDate.toISOString(),
-    goalDistance: latestPlan.goalDistance,
-    sessions: latestPlan.sessions,
-    currentPace: secondsToPace(latestPlan.currentPaceSeconds),
-    goalPace: secondsToPace(latestPlan.goalPaceSeconds),
-    totalWeeks: latestPlan.totalWeeks,
-    intensity: latestPlan.intensity,
-    adjustment: latestPlan.adjustment,
-    summary: planSummary.textContent,
-  };
-
-  user.plans = [planSnapshot, ...user.plans.filter((plan) => plan.summary !== planSnapshot.summary)]
-    .slice(0, 8);
-
-  if (extra.coaching) {
-    user.coachings = [
-      {
-        createdAt: new Date().toISOString(),
-        title: extra.coaching.title,
-        message: extra.coaching.message,
-        planLabel: extra.coaching.planLabel,
-      },
-      ...user.coachings,
-    ].slice(0, 12);
-  }
-
-  users[activeUser] = user;
-  writeUsers(users);
-  updateLoginStatus();
-}
-
-function loadLatestUserPlan() {
-  const user = ensureUser(activeUser);
-  const latestSavedPlan = user.plans[0];
-
-  if (!latestSavedPlan) return;
-
-  document.querySelector("#currentPace").value = latestSavedPlan.currentPace;
-  document.querySelector("#goalPace").value = latestSavedPlan.goalPace;
-  document.querySelector("#goalDistance").value = String(latestSavedPlan.goalDistance);
-  document.querySelector("#sessions").value = String(latestSavedPlan.sessions);
-  raceDateInput.value = toInputDate(new Date(latestSavedPlan.raceDate));
-  handlePlanSubmit();
-}
-
-function ensureUser(name) {
-  const users = readUsers();
-
-  if (!users[name]) {
-    users[name] = { plans: [], coachings: [] };
-    writeUsers(users);
-  }
-
-  return users[name];
-}
-
-function readUsers() {
-  try {
-    return JSON.parse(storageGet(STORAGE_KEY)) || {};
-  } catch {
-    return {};
-  }
-}
-
-function writeUsers(users) {
-  storageSet(STORAGE_KEY, JSON.stringify(users));
-}
-
-function storageGet(key) {
-  try {
-    return localStorage.getItem(key);
-  } catch {
+  if (!distance || distance <= 0 || !workoutPace) {
+    coachResult.textContent = "달린 거리와 평균 페이스를 입력해 주세요. 페이스는 6:20처럼 입력하면 됩니다.";
     return null;
   }
+
+  return { distance, workoutPace, effort, completion, hasImage };
 }
 
-function storageSet(key, value) {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    loginStatus.textContent = "브라우저 저장소가 막혀 있어 이번 화면에서만 사용할 수 있어요.";
+function buildWorkoutInsight(workout, plan) {
+  const baselinePace = plan?.currentPaceSeconds || workout.workoutPace;
+  const zones = plan?.zones || getTrainingZones(baselinePace, baselinePace - 20);
+  const easyDiff = workout.workoutPace - zones.easy;
+  const isLong = plan ? workout.distance >= plan.longRunTarget * 0.8 : workout.distance >= 8;
+  const isFast = workout.workoutPace <= zones.tempo + 5;
+  const isTooHard = workout.effort === "hard" || workout.completion <= 60;
+
+  let title = "오늘 운동은 적정 범위예요";
+  let message = `평균 ${secondsToPace(workout.workoutPace)}/km로 ${workout.distance}km를 뛰었습니다.`;
+  let insight = "페이스와 체감도가 크게 어긋나지 않습니다.";
+  let next = "다음 훈련은 예정대로 이지런으로 이어가면 됩니다.";
+
+  if (isTooHard && isFast) {
+    title = "오늘은 강도가 꽤 높았어요";
+    insight = "빠른 페이스와 높은 체감도가 같이 나왔습니다. 바로 빠른 훈련을 반복하면 피로가 쌓일 수 있어요.";
+    next = `다음 러닝은 ${paceRange(zones.recovery, 12)} 회복 조깅으로 ${Math.max(
+      3,
+      Math.round(workout.distance * 0.55)
+    )}km만 뛰세요.`;
+  } else if (isTooHard) {
+    title = "페이스보다 피로가 더 크게 느껴졌어요";
+    insight = "속도 자체보다 컨디션, 수면, 누적 피로의 영향을 받은 날로 보입니다.";
+    next = `다음 훈련은 ${paceRange(zones.easy + 15, 10)} 이지런으로 낮추세요.`;
+  } else if (isFast && workout.effort === "easy") {
+    title = "목표 페이스 적응이 좋아요";
+    insight = "빠른 편인데도 편안했다면 몸이 목표 페이스에 적응하고 있다는 신호입니다.";
+    next = "다음 주 템포런 시간을 5분만 늘려도 괜찮습니다.";
+  } else if (isLong) {
+    title = "지구력 훈련이 잘 됐어요";
+    insight = "거리 자극이 충분했습니다. 오늘 운동의 가치는 속도보다 오래 버틴 힘에 있습니다.";
+    next = "다음 운동은 짧고 느리게, 다리를 풀어주는 쪽으로 가세요.";
+  } else if (easyDiff > 25 && workout.effort === "easy") {
+    title = "조금 더 선명한 자극을 줘도 돼요";
+    insight = "운동이 너무 편했다면 다음번 이지런 마지막 10분만 살짝 올려도 됩니다.";
+    next = `다음 이지런 후반 10분을 ${paceRange(zones.steady, 8)}로 마무리해 보세요.`;
   }
+
+  if (workout.hasImage) {
+    message += " 업로드한 기록 이미지는 저장하지 않고, 입력한 수치와 함께 인사이트 문맥으로만 사용합니다.";
+  }
+
+  return { title, message, insight, next };
 }
 
-function storageRemove(key) {
-  try {
-    localStorage.removeItem(key);
-  } catch {
-    return null;
-  }
+function renderWorkoutInsight(insight) {
+  coachResult.innerHTML = `
+    <strong>${insight.title}</strong>
+    <p>${insight.message}</p>
+    <ul>
+      <li>${insight.insight}</li>
+      <li>${insight.next}</li>
+    </ul>
+  `;
+}
+
+function showPlanError(message) {
+  planSummary.textContent = message;
+  planInsight.innerHTML = `<strong>입력 확인</strong><span>${message}</span>`;
+  planList.innerHTML = "";
 }
 
 function paceToSeconds(selector) {
@@ -543,9 +382,14 @@ function parseDuration(value) {
 }
 
 function secondsToPace(seconds) {
-  const minutes = Math.floor(seconds / 60);
-  const rest = String(seconds % 60).padStart(2, "0");
+  const rounded = Math.max(1, Math.round(seconds));
+  const minutes = Math.floor(rounded / 60);
+  const rest = String(rounded % 60).padStart(2, "0");
   return `${minutes}:${rest}`;
+}
+
+function paceRange(center, spread) {
+  return `${secondsToPace(center - spread)}~${secondsToPace(center + spread)}/km`;
 }
 
 function toInputDate(date) {
@@ -557,13 +401,6 @@ function toInputDate(date) {
 
 function startOfDay(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function formatShortDate(value) {
-  return new Date(value).toLocaleDateString("ko-KR", {
-    month: "numeric",
-    day: "numeric",
-  });
 }
 
 function clamp(value, min, max) {
